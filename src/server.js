@@ -9,19 +9,60 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-/** GET /products?q=  */
+
 app.get('/products', async (req, res) => {
     try {
-        const q = req.query.q;
-        const where = q ? {
-            OR: [
-                { name: { contains: q, mode: 'insensitive' } },
-                { description: { contains: q, mode: 'insensitive' } }
-            ]
-        } : {};
+        const where = {};
+        console.log('Searching for:', req.query);
+
+        if (req.query.q) {
+            // Split query into words and search across multiple columns
+            const tokens = req.query.q.split(/\s+/).filter(Boolean);
+            where.AND = tokens.map(token => ({
+                OR: [
+                    { tipoPrenda: { contains: token, mode: 'insensitive' } },
+                    { color: { contains: token, mode: 'insensitive' } },
+                    { talla: { contains: token, mode: 'insensitive' } },
+                    { categoria: { contains: token, mode: 'insensitive' } },
+                    { descripcion: { contains: token, mode: 'insensitive' } }
+                ]
+            }));
+        }
+
+        // Map query params to Prisma fields
+        const columnMap = {
+            tipo_prenda: 'tipoPrenda',
+            color: 'color',
+            talla: 'talla',
+            categoria: 'categoria',
+            descripcion: 'descripcion',
+            disponible: 'disponible',
+            cantidad_disponible: 'stock',
+            precio50_u: 'price50',
+            precio100_u: 'price100',
+            precio200_u: 'price200'
+        };
+
+        for (const [key, prop] of Object.entries(columnMap)) {
+            if (req.query[key]) {
+                if (['tipoPrenda', 'color', 'talla', 'categoria', 'descripcion'].includes(prop)) {
+                    where[prop] = { contains: req.query[key], mode: 'insensitive' };
+                } else if (['stock', 'price50', 'price100', 'price200'].includes(prop)) {
+                    where[prop] = { equals: Number(req.query[key]) };
+                } else if (prop === 'disponible') {
+
+                    const val = req.query[key].toLowerCase() === 'si' ? 'Sí' : 'No';
+                    where[prop] = { equals: val };
+                }
+            }
+        }
+
         const products = await prisma.product.findMany({ where });
         res.json(products);
-    } catch (err) { console.error(err); res.status(500).json({ error: 'server error' }); }
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'server error' });
+    }
 });
 
 /** GET /products/:id */

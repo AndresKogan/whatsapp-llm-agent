@@ -1,7 +1,7 @@
 // src/agent.js
 require('dotenv').config();
 const express = require('express');
-
+const { askLLM, doAction } = require("./llm");
 const app = express();
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
@@ -15,7 +15,8 @@ app.use("/", whatsappRouter);
 app.post('/agent', async (req, res) => {
     try {
         const userText = req.body.text;
-        const parsed = await askLLM(userText);
+        const parsed = await askLLM(userText)
+        console.log("parsed", parsed);
         const result = await doAction(parsed);
         res.json({ parsed, result });
     } catch (err) {
@@ -25,3 +26,4 @@ app.post('/agent', async (req, res) => {
 
 const PORT = process.env.AGENT_PORT || 4000;
 app.listen(PORT, () => console.log(`Agent listening on ${PORT}`));
+
