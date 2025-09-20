@@ -15,7 +15,8 @@ Acciones posibles:
 - "create_cart": crear un carrito con productos exactos.
 - "update_cart": cuando el usuario ya tiene un carrito y quiere agregar más productos.
 - "get_cart": mostrar el carrito existente.
-- "ask_specifications": pedir aclaración cuando el usuario intenta agregar al carrito un producto ambiguo (ej: "quiero una remera" y hay muchas remeras). SOLO para agregar al carrito se puede usar esta acción
+subactions posibles:
+- "ask_specifications": pedir aclaración cuando el usuario intenta crear o agregar al carrito un producto ambiguo (ej: "quiero una remera" y hay muchas remeras). SOLO para agregar al carrito se puede usar esta acción
 Querys posibles en params:
     -ID, 
     -TIPO_PRENDA, 
@@ -30,7 +31,7 @@ Querys posibles en params:
     -DESCRIPCIÓN
 
 Reglas:
-- Usa "ask_specifications" solo si la intención es agregar al carrito y hay más de una coincidencia.
+- Usa "ask_specifications" SOLO si la intención es crear o modificar el carrito y hay más de una coincidencia.
 - En ese caso, devuelve en params.items[0].tipoPrenda el producto genérico (ej: "pantalón").
 - Para filtrar los productos debes usar los nombres de las columnas de la base de datos que son: 
     -ID, 
@@ -106,12 +107,12 @@ async function doAction(parsed, from, userCarts) {
         console.log("r", r.data);
 
         return {
-            action: a,
-            text: `Encontré ${r.data.length} productos. Primeros 5: ${JSON.stringify(r.data.slice(0, 5))}`,
-            raw: r.data
+            action: "list_products",
+            text: `Encontré ${r.data.length} productos.`,
+            raw: r.data // Devuelve todos los productos para formatearlos luego
         };
-
     }
+
 
     // ---------------- GET PRODUCT ----------------
     if (a === 'get_product') {
@@ -130,32 +131,47 @@ async function doAction(parsed, from, userCarts) {
         const ambiguousMatches = [];
 
         for (let item of p.items || []) {
-            const res = await axios.get(`${API_BASE}/products?q=${encodeURIComponent(item.tipoPrenda)}`);
+            const tipoPrenda = item.tipoPrenda || item.tipo_prenda;
+            const color = item.color;
+            const talla = item.talla;
+            const cantidad = item.cantidad || 1;
+            const precio = item.precio || item.price50;
+
+            const res = await axios.get(`${API_BASE}/products?q=${encodeURIComponent(tipoPrenda)}`);
             const matches = res.data.filter(prod => {
-                // Filtra por color, talla y precio si están en params
-                if (item.color && prod.color?.toLowerCase() !== item.color.toLowerCase()) return false;
-                if (item.talla && prod.talla?.toLowerCase() !== item.talla.toLowerCase()) return false;
-                if (item.price50 && prod.price50 !== item.price50) return false;
+                if (color && prod.color?.toLowerCase() !== color.toLowerCase()) return false;
+                if (talla && prod.talla?.toLowerCase() !== talla.toLowerCase()) return false;
+                if (precio && prod.price50 !== precio) return false; // ajusta según columna
                 return true;
             });
 
             if (matches.length === 1) {
-                itemsWithIds.push({ product_id: matches[0].id, qty: item.qty });
+                itemsWithIds.push({ product_id: matches[0].id, qty: cantidad });
             } else if (matches.length > 1) {
-                ambiguousMatches.push({ tipoPrenda: item.tipoPrenda, options: matches });
+                ambiguousMatches.push({
+                    tipoPrenda,
+                    options: matches.map(m => ({
+                        id: m.id,
+                        tipoPrenda: m.tipoPrenda,
+                        color: m.color,
+                        talla: m.talla,
+                        price50: m.price50
+                    }))
+                });
             }
         }
 
         if (ambiguousMatches.length > 0) {
             return {
-                action: "ask_specifications",
-                text: `Encontré varias opciones para ${ambiguousMatches.map(m => m.tipoPrenda).join(", ")}. ¿Podés aclarar modelo, color o talla?`,
-                raw: ambiguousMatches
+                subaction: "ask_specifications",
+                text: `Encontré varias opciones para ${ambiguousMatches.map(m => m.tipoPrenda).join(", ")}. ¿Cuál querés agregar al carrito?`,
+                params: { items: ambiguousMatches } // <--- IMPORTANTE
             };
         }
 
         if (itemsWithIds.length === 0) {
-            return { action: a, text: "No pude encontrar ninguno de los productos que mencionaste.", raw: [] };
+            console.log("salsa", itemsWithIds);
+            return { action: a, text: "No pude encontrar ninguno de los productos que mencionaste.", params: { items: [] } };
         }
 
         const r = await axios.post(`${API_BASE}/carts`, { items: itemsWithIds });
@@ -169,7 +185,8 @@ async function doAction(parsed, from, userCarts) {
 
     // ---------------- UPDATE CART ----------------
     if (a === 'update_cart') {
-        if (!p.id) return { action: a, text: "Necesito el id de tu carrito para agregar productos.", raw: null };
+        const cartId = p.id || userCarts[from];
+        if (!cartId) return { action: a, text: "No pude encontrar tu carrito." };
 
         const itemsWithIds = [];
         const ambiguousMatches = [];
@@ -200,7 +217,7 @@ async function doAction(parsed, from, userCarts) {
             });
 
             return {
-                action: "ask_specifications",
+                subaction: "ask_specifications",
                 text: msgs.join("\n\n") + "\n\n❓ ¿Cuál de estas opciones querés agregar al carrito? (Responde con el número)",
                 raw: ambiguousMatches
             };
@@ -208,10 +225,10 @@ async function doAction(parsed, from, userCarts) {
 
         if (itemsWithIds.length === 0) return { action: a, text: "No encontré productos para agregar.", raw: [] };
 
-        const r = await axios.put(`${API_BASE}/carts/${p.id}`, { items: itemsWithIds });
+        const r = await axios.put(`${API_BASE}/carts/${cartId}`, { items: itemsWithIds });
         return {
             action: a,
-            text: `Carrito (id ${p.id}) actualizado con ${itemsWithIds.length} productos más`,
+            text: `Carrito (id ${cartId}) actualizado con ${itemsWithIds.length} productos más`,
             raw: r.data
         };
     }
@@ -248,14 +265,18 @@ async function doAction(parsed, from, userCarts) {
 // ---------- Función principal ----------
 
 async function handleUserMessage(userMessage, from, userCarts) {
-    const parsed = await askLLM(userMessage);
-    console.log("userMessage", userMessage);
+    // 1️⃣ Obtener la acción del LLM
+    let parsed = await askLLM(userMessage);
+    parsed.params = parsed.params || {};
+
+    // 2️⃣ Si ya hay carrito, cambiar create_cart a update_cart
     if (parsed.action === "create_cart" && userCarts[from]) {
         parsed.action = "update_cart";
         parsed.params.id = userCarts[from];
     }
 
-    return doAction(parsed);
+    // 3️⃣ Ejecutar la acción
+    return doAction(parsed, from, userCarts);
 }
 
 module.exports = { handleUserMessage, askLLM, doAction };
