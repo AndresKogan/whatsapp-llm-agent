@@ -208,7 +208,7 @@ async function doAction(parsed, from, userCarts) {
 
         if (itemsWithIds.length === 0) return { action: a, text: "No encontré productos para agregar.", raw: [] };
 
-        const r = await axios.patch(`${API_BASE}/carts/${p.id}`, { items: itemsWithIds });
+        const r = await axios.put(`${API_BASE}/carts/${p.id}`, { items: itemsWithIds });
         return {
             action: a,
             text: `Carrito (id ${p.id}) actualizado con ${itemsWithIds.length} productos más`,
